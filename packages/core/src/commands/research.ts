@@ -33,9 +33,10 @@ export const RESEARCH_ACTIONS = [
 export const RESEARCH_PROVIDERS = [
   'dataforseo',
   'ahrefs',
+  'cloro',
 ] as const satisfies readonly ResearchProvider[]
 
-export const RESEARCH_HELP = `keyword_metrics (keywords: volume, difficulty, CPC), ranked_keywords (target: keywords a domain or URL ranks for), serp (keywords, up to 5: the ranking pages), competitors (target: domains that share keywords), backlinks (target: referring domains), link_gap (target and 2 to 5 competitors: referring domains that link to two or more competitors and not the target, highest authority first, from each site's top 1,000 referring domains; costs one backlinks call per site), ai_answers (DataForSEO only; target: the site. Without keywords it takes the site’s top ${AI_ANSWER_QUESTIONS} chat-style and long questions from Search Console’s AI-shaped queries itself. With up to ${AI_ANSWER_QUESTIONS} questions in keywords it asks those instead, and the target can be any domain, such as a competitor's. Each answer row also lists the other sites it cites, and the notes rank them. Answers come from DataForSEO's queue: answers not ready after about 40 seconds are returned as tasks, already paid for; call again with the same target and those tasks to read them at no cost. It asks ChatGPT search, Google AI Mode and Google AI Overviews each one and says whether the answer cites or mentions the site. DataForSEO’s queue prices are about $0.0072 a question across the three engines, so about $0.07 a run: tell the person before running it). Rows with a domain, and the target, get a free Ahrefs domain_rating column. Numbers are provider estimates, not Search Console data.`
+export const RESEARCH_HELP = `keyword_metrics (keywords: volume, difficulty, CPC), ranked_keywords (target: keywords a domain or URL ranks for), serp (keywords, up to 5: the ranking pages. cloro returns the first page of Google results and the pages the AI Overview cites, as type ai_overview rows, for 7 credits a keyword), competitors (target: domains that share keywords), backlinks (target: referring domains), link_gap (target and 2 to 5 competitors: referring domains that link to two or more competitors and not the target, highest authority first, from each site's top 1,000 referring domains; costs one backlinks call per site), ai_answers (DataForSEO or cloro; target: the site. Without keywords it takes the site’s top ${AI_ANSWER_QUESTIONS} chat-style and long questions from Search Console’s AI-shaped queries itself. With up to ${AI_ANSWER_QUESTIONS} questions in keywords it asks those instead, and the target can be any domain, such as a competitor's. Each answer row also lists the other sites it cites, and the notes rank them. Answers come from the provider's queue: answers not ready after about 40 seconds are returned as tasks; call again with the same provider, target and those tasks to read them at no cost. DataForSEO charges a task when it is queued, cloro when it finishes. DataForSEO asks ChatGPT search, Google AI Mode and Google AI Overviews; cloro asks ChatGPT, Google AI Mode and Gemini. It asks each engine every question and says whether the answer cites or mentions the site. DataForSEO’s queue prices are about $0.0072 a question across the three engines, so about $0.07 a run; cloro charges 13 credits a question, so up to 130 credits a run: tell the person before running it). cloro has only serp and ai_answers. Rows with a domain, and the target, get a free Ahrefs domain_rating column. Numbers are provider estimates, not Search Console data.`
 
 // Platforms that share keywords with almost every site. Competitor lists
 // leave them out, with the target itself, and say how many rows went.
@@ -123,6 +124,7 @@ export async function runResearch(
   const {
     rows: found,
     costUsd,
+    credits,
     partial,
     missed,
     noData,
@@ -163,6 +165,7 @@ export async function runResearch(
       notes: [
         `${input.provider} estimates, in the provider’s own units.`,
         ...(costUsd !== null ? [`DataForSEO cost: $${costUsd}.`] : []),
+        ...(credits !== null ? [`cloro credits charged: ${credits}.`] : []),
         ...(partial
           ? [
               'Partial: DataForSEO could not fetch some pages of results, so rows may be missing.',
@@ -210,6 +213,7 @@ export async function runResearch(
       attribution: rated.added || hasTargetDr ? DR_ATTRIBUTION : null,
       leftOut: note,
       costUsd,
+      credits,
       partial,
       missedKeywords: missed,
       noDataKeywords: noData,

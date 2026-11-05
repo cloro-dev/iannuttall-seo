@@ -44,6 +44,7 @@ import { querySearchAnalytics } from './gsc/client/search-analytics.js'
 import { listSites } from './gsc/client/sites.js'
 import { readAhrefsApiKey } from './providers/ahrefs/credentials.js'
 import { readBingApiKey } from './providers/bing/credentials.js'
+import { readCloroApiKey } from './providers/cloro/credentials.js'
 import { readDataForSeoCredentials } from './providers/dataforseo/credentials.js'
 import { localIssues } from './storage/issues.js'
 
@@ -124,9 +125,10 @@ export async function localAccounts(): Promise<GoogleAccount[]> {
 // Provider keys, as header-style names: keys saved on this machine win over
 // the seoskill.dev account's. Keys go only to their provider.
 export async function localResearchKeys(): Promise<Headers> {
-  const [dataForSeo, ahrefs, clicky, saved] = await Promise.all([
+  const [dataForSeo, ahrefs, cloro, clicky, saved] = await Promise.all([
     readDataForSeoCredentials().catch(() => undefined),
     readAhrefsApiKey().catch(() => undefined),
+    readCloroApiKey().catch(() => undefined),
     readClickySiteKeys().catch(() => ({})),
     cloudLinked() ? cloudKeys().catch(() => ({})) : {},
   ])
@@ -141,6 +143,7 @@ export async function localResearchKeys(): Promise<Headers> {
     keys.set('x-dataforseo-password', dataForSeo.password)
   }
   if (ahrefs?.apiKey) keys.set('x-ahrefs-key', ahrefs.apiKey)
+  if (cloro?.apiKey) keys.set('x-cloro-key', cloro.apiKey)
   return keys
 }
 

@@ -26,6 +26,7 @@ export * from './present.js'
 export * from './report.js'
 export * from './research.js'
 export {
+  cloroCredits,
   dataForSeoLanguage,
   dataForSeoMarket,
   dataForSeoTask,

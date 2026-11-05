@@ -1,8 +1,8 @@
 ---
 title: API keys for the hosted MCP
-description: Add your own DataForSEO or Ahrefs key for keyword and competitor research, and your Clicky sites for analytics. Save them encrypted on your account page.
+description: Add your own DataForSEO, Ahrefs or cloro key for keyword, competitor and AI answer research, and your Clicky sites for analytics. Save them encrypted on your account page.
 heading: API keys
-lead: Keyword and competitor research uses your own DataForSEO or Ahrefs account. Save the key on your account page, or send it as a header.
+lead: Keyword, competitor and AI answer research uses your own DataForSEO, Ahrefs or cloro account. Save the key on your account page, or send it as a header.
 ---
 
 Search Console and Google Analytics come with your Google sign-in. Research is optional and uses a key from your own account, so the provider bills you directly for what you use.
@@ -12,9 +12,12 @@ Search Console and Google Analytics come with your Google sign-in. Research is o
 | Provider | What it adds | Tool |
 | --- | --- | --- |
 | DataForSEO or Ahrefs | Keyword metrics, ranked keywords, SERPs, competitors and backlinks | `seo_research` |
+| cloro | Google results with the AI Overview, and whether ChatGPT, Google AI Mode and Gemini cite your site | `seo_research` |
 | Clicky | Visits by landing page, traffic sources and search engines | `seo_data` |
 
 Clicky takes your Clicky account login, which adds every site, or one site at a time with its site ID and sitekey. The [analytics guide](/docs/analytics#clicky) explains both.
+
+Get a cloro key at [dashboard.cloro.dev](https://dashboard.cloro.dev/api-keys?utm_source=iannuttall-seo&utm_medium=byok). The Free plan includes 500 credits a month.
 
 Research rows also get a free Domain Rating column, with no key needed. It is Domain Rating by [Ahrefs](https://ahrefs.com).
 
@@ -23,9 +26,9 @@ Research rows also get a free Domain Rating column, with no key needed. It is Do
 This works in every client, and you never paste a key into a chat.
 
 1. Open your [account page](https://seoskill.dev/account) and sign in with Google.
-2. Open the **Keys** tab. Enter the DataForSEO or Ahrefs keys you want and choose **Save keys**, or add your Clicky account or a Clicky site.
+2. Open the **Keys** tab. Enter the DataForSEO, Ahrefs or cloro keys you want and choose **Save keys**, or add your Clicky account or a Clicky site.
 
-Saved keys are encrypted and never shown again. To change one, enter the new value and save. **Remove these keys** deletes the DataForSEO and Ahrefs keys, **Remove** next to a Clicky site deletes that site, and **Remove account and its sites** deletes the Clicky login and every site it added.
+Saved keys are encrypted and never shown again. To change one, enter the new value and save. **Remove these keys** deletes the DataForSEO, Ahrefs and cloro keys, **Remove** next to a Clicky site deletes that site, and **Remove account and its sites** deletes the Clicky login and every site it added.
 
 The CLI uses the same keys once you link it to your account with `seo login`.
 
@@ -42,6 +45,7 @@ claude mcp add --transport http seoskill https://seoskill.dev/mcp \
 | --- | --- |
 | DataForSEO | `X-DataForSEO-Login`, `X-DataForSEO-Password` |
 | Ahrefs | `X-Ahrefs-Key` |
+| cloro | `X-Cloro-Key` |
 
 Keep keys in your shell environment or keychain, never in a chat or a repository file. On cloud agents and CI, put them in the platform secrets and follow the [cloud agents guide](/docs/cloud-agents).
 

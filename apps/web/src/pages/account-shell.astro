@@ -42,6 +42,7 @@ const keys: { name: string; label: string; type: 'text' | 'password' }[] = [
     type: 'password',
   },
   { name: 'x-ahrefs-key', label: 'Ahrefs API key', type: 'password' },
+  { name: 'x-cloro-key', label: 'cloro API key', type: 'password' },
   { name: 'x-typesafe-key', label: 'TypeSafe API key', type: 'password' },
 ]
 ---
@@ -214,10 +215,11 @@ const keys: { name: string; label: string; type: 'text' | 'password' }[] = [
         hidden
       >
         <div class={panel} id="keys">
-          <h2 class={heading}>DataForSEO, Ahrefs and TypeSafe</h2>
+          <h2 class={heading}>DataForSEO, Ahrefs, cloro and TypeSafe</h2>
           <p class={note}>
             DataForSEO and Ahrefs add keyword, SERP, competitor and backlink
-            data from your own account. A TypeSafe key lets internal link
+            data from your own account. cloro adds Google results with the AI
+            Overview, and AI answer checks. A TypeSafe key lets internal link
             audits use Jev to sort your pages and judge each link (about 10 to
             20 cents for a 500-page site). Each request uses your credits there.
             Saved keys are encrypted and never shown again.

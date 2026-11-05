@@ -23,7 +23,7 @@ no password or separate signup.
 Sign in with Google at `https://seoskill.dev/account` to:
 
 - **Accounts:** see your linked Google accounts and Bing, and add another,
-- **Keys:** save or remove DataForSEO, Ahrefs and TypeSafe keys, a Clicky
+- **Keys:** save or remove DataForSEO, Ahrefs, cloro and TypeSafe keys, a Clicky
   account login and Clicky sites (never shown again),
 - **Machines:** approve a `seo login`, remove a linked machine, or make a
   token for a cloud agent,
@@ -259,7 +259,7 @@ links to the account page.
 
 ## Keys
 
-DataForSEO and Ahrefs use your own key. A TypeSafe key
+DataForSEO, Ahrefs and cloro use your own key. A TypeSafe key
 (`x-typesafe-key`) is never used by this server: a linked CLI gets it with
 the other keys, and `seo internal-links` uses it on that machine to have Jev
 classify pages and judge links. Clicky uses each site's site ID and
@@ -284,6 +284,7 @@ There are two ways to give a key, and neither puts it in a chat:
 | --- | --- |
 | DataForSEO | `X-DataForSEO-Login`, `X-DataForSEO-Password` |
 | Ahrefs | `X-Ahrefs-Key` |
+| cloro | `X-Cloro-Key` |
 | Clicky | `X-Clicky-<site id>` with the sitekey |
 
 ```sh
@@ -303,7 +304,7 @@ repository.
 | `seo_page` | One URL: live page facts, Google index status and its queries against the previous period. The page's main content as Markdown is CLI and local server only; with detail `full` this server says how to get it. |
 | `seo_compare` | Equal periods before and after a date, for the site or URLs that contain some text, with Google updates |
 | `seo_index` | Google's indexing reasons for 100 known URLs a run, checked live and labelled, and pages that lost most of their clicks |
-| `seo_research` | Keyword metrics, ranked keywords, SERPs, competitors and backlinks from DataForSEO or Ahrefs, with a free Ahrefs Domain Rating column |
+| `seo_research` | Keyword metrics, ranked keywords, SERPs, competitors and backlinks from DataForSEO or Ahrefs, Google results with the AI Overview from cloro, and AI answer checks from DataForSEO or cloro, with a free Ahrefs Domain Rating column |
 | `seo_data` | Raw Search Console rows, search landing pages from Google Analytics, or Clicky visits by landing page with traffic sources and search engines. |
 | `seo_lint` | Checks copy sent as text (up to 200,000 characters) for patterns common in AI-written text, weak copy and title and description length, with a fix for each finding and a list of lines to judge. Reads no account data. |
 
@@ -333,7 +334,7 @@ A small Cloudflare D1 database (`migrations/`) keeps only:
 - a random person id, created at your first Google sign-in,
 - each linked Google account's email and refresh and access tokens,
 - each linked Bing account's tokens and a name made from its sites,
-- your DataForSEO, Ahrefs and TypeSafe keys, if you save them,
+- your DataForSEO, Ahrefs, cloro and TypeSafe keys, if you save them,
 - your Clicky sites, if you save them: site ID, sitekey and domain,
 - your Clicky account login, if you save it: username and password, used
   only to read your Clicky site list,

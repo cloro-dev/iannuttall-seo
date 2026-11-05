@@ -16,6 +16,7 @@ export const PROVIDER_SECRET_NAMES = {
   ahrefsApiKey: 'ahrefs-api-key',
   bingApiKey: 'bing-api-key',
   clickySiteKeys: 'clicky-sitekeys',
+  cloroApiKey: 'cloro-api-key',
   dataForSeoCredentials: 'dataforseo-credentials',
   providerExtensionCredentials: 'provider-extension-credentials',
 } as const

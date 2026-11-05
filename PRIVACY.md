@@ -30,7 +30,7 @@ encrypted before they are written.
   read-only access to Search Console and Google Analytics.
 - **Bing, if you link it.** Its tokens, with read-only access to Bing
   Webmaster Tools, and a name made from its sites.
-- **Keys you save.** DataForSEO, Ahrefs and TypeSafe keys.
+- **Keys you save.** DataForSEO, Ahrefs, cloro and TypeSafe keys.
 - **Clicky, if you save it.** Each site's ID, sitekey and domain. If you save
   your Clicky login, we keep your username and password, encrypted, and use
   them only to read your list of Clicky sites. The password never leaves
@@ -204,6 +204,7 @@ You can remove our access at any time in your
 When you use a provider, it handles your request under its own policy:
 [DataForSEO](https://dataforseo.com/privacy-policy) (which says it keeps
 API task data for 365 days), [Ahrefs](https://ahrefs.com/legal/privacy-policy),
+[cloro](https://cloro.dev/privacy?utm_source=iannuttall-seo&utm_medium=byok),
 [TypeSafe](https://typesafe.ai/legal/privacy-policy), Clicky, Bing and
 Google.
 

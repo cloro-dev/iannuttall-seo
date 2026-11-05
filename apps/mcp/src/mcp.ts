@@ -64,7 +64,9 @@ function sharedTool(shared: SharedTool): Tool {
       }
       if (
         shared.name === 'seo_research' &&
-        (provider === 'dataforseo' || provider === 'ahrefs')
+        (provider === 'dataforseo' ||
+          provider === 'ahrefs' ||
+          provider === 'cloro')
       ) {
         const calls =
           action === 'serp' && Array.isArray(keywords)
@@ -91,10 +93,11 @@ function savedKeys(env: Env, headers: Headers): string {
   const saved = [
     headers.get('x-dataforseo-login') && 'dataforseo',
     headers.get('x-ahrefs-key') && 'ahrefs',
+    headers.get('x-cloro-key') && 'cloro',
   ].filter(Boolean)
   return saved.length
     ? `Research keys saved: ${saved.join(', ')}. seo_research with another provider needs that key saved first.`
-    : `No research key is saved, so seo_research fails until the person saves a DataForSEO or Ahrefs key at ${accountUrl(env)}#keys. Ask them first.`
+    : `No research key is saved, so seo_research fails until the person saves a DataForSEO, Ahrefs or cloro key at ${accountUrl(env)}#keys. Ask them first.`
 }
 
 const instructions = (env: Env, headers: Headers) => `${MCP_INSTRUCTIONS}

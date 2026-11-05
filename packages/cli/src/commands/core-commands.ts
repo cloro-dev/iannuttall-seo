@@ -509,7 +509,7 @@ export const researchCommand = defineCommand({
   meta: {
     name: 'research',
     description:
-      'Keyword, SERP, competitor, backlink and AI answer data from your DataForSEO or Ahrefs key',
+      'Keyword, SERP, competitor, backlink and AI answer data from your DataForSEO, Ahrefs or cloro key',
   },
   args: {
     action: {
@@ -552,12 +552,15 @@ export const researchCommand = defineCommand({
     const header: Record<ResearchProvider, string> = {
       dataforseo: 'x-dataforseo-login',
       ahrefs: 'x-ahrefs-key',
+      cloro: 'x-cloro-key',
     }
     const chosen = stringArg(args.provider)
     const provider = (chosen ??
-      (action === 'ai_answers'
-        ? 'dataforseo'
-        : RESEARCH_PROVIDERS.find((name) => keys.has(header[name]))) ??
+      RESEARCH_PROVIDERS.find(
+        (name) =>
+          keys.has(header[name]) &&
+          (action === 'ai_answers' ? name !== 'ahrefs' : true),
+      ) ??
       'dataforseo') as ResearchProvider
     if (!RESEARCH_PROVIDERS.includes(provider)) {
       throw new SeoError(
@@ -576,8 +579,11 @@ export const researchCommand = defineCommand({
     const competitors = csvArg(args.competitors) ?? []
     const country = stringArg(args.country)
     if (action === 'ai_answers') {
-      if (provider !== 'dataforseo') {
-        throw new SeoError('INVALID_INPUT', 'ai_answers uses dataforseo.')
+      if (provider === 'ahrefs') {
+        throw new SeoError(
+          'INVALID_INPUT',
+          'ai_answers uses dataforseo or cloro.',
+        )
       }
       const tasks = csvArg(args.tasks) ?? []
       const site =
@@ -587,6 +593,7 @@ export const researchCommand = defineCommand({
       await run(args, (deps) =>
         runAiAnswers(
           {
+            provider,
             site,
             country: country ?? 'us',
             detail: detailArg(args),
@@ -601,6 +608,7 @@ export const researchCommand = defineCommand({
           (offset, answered) =>
             cliCall('research', {
               action,
+              provider,
               target,
               tasks: answered.join(',') || undefined,
               country,

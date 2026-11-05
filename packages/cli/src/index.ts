@@ -141,7 +141,7 @@ const helpSections: HelpSection[] = [
       ['seo login', 'Use your seoskill.dev account on this machine'],
       ['seo sites', 'List Search Console properties'],
       ['seo mcp install', 'Add the local MCP server to your agents'],
-      ['seo providers', 'Connect DataForSEO or Ahrefs'],
+      ['seo providers', 'Connect DataForSEO, Ahrefs or cloro'],
       ['seo doctor', 'Check local auth and config'],
     ],
   },

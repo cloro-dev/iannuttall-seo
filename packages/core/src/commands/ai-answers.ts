@@ -2,6 +2,9 @@ import { aiQueriesReport } from '../analyze/ai-queries.js'
 import { deriveBrandTerms, isBrandQuery, registrableDomain } from '../brand.js'
 import type { Detail } from './present.js'
 import {
+  cloroKey,
+  cloroQueue,
+  cloroTaskGet,
   DATAFORSEO_NO_RESULTS,
   DATAFORSEO_NOT_READY,
   type DataForSeoQueued,
@@ -19,20 +22,22 @@ import { type CommandDeps, CommandError, type CommandResult } from './types.js'
 // Whether AI answers cite or mention a site, for the questions people
 // already ask AI about it: the top AI-shaped questions in the site's own
 // Search Console, or up to 10 questions the person gives. One answer per
-// question and engine, from the person's own DataForSEO account.
+// question and engine, from the person's own DataForSEO or cloro account.
 //
 // Questions go in DataForSEO's queue (one request per engine), not its live
 // endpoints: a live answer takes up to a minute, and a Cloudflare Worker can
 // only wait on six requests at once, so 30 live calls outlast any MCP
 // client. Queued answers are read back until waitSeconds runs out; any
 // still in the queue are returned as task ids, already paid for, to read
-// later at no cost.
+// later at no cost. cloro runs the same way through its async API: one
+// batch a run, read back the same way, and each answer charged when it
+// finishes.
 
 export const AI_ANSWER_QUESTIONS = 10
 const QUESTION_DAYS = 90
 
 // What an engine showed: the answer as Markdown, the URLs it cited (never
-// pages it only looked at), and the model DataForSEO says answered.
+// pages it only looked at), and the model the provider says answered.
 type Shown = { markdown: string; sources: string[]; model: string | null }
 
 // Where and in which language an engine is asked. location is the code
@@ -125,6 +130,41 @@ const ENGINES: Engine[] = [
   },
 ]
 
+// cloro's engines, by the taskType of its async API. Each answer has the
+// same shape: the text, the sources and, for ChatGPT, the model.
+const CLORO_ENGINES = [
+  {
+    name: 'chatgpt',
+    means: 'a ChatGPT answer with web search, read by cloro',
+    type: 'CHATGPT',
+  },
+  { name: 'google_ai_mode', means: 'Google AI Mode', type: 'AIMODE' },
+  { name: 'gemini', means: 'Google Gemini', type: 'GEMINI' },
+]
+
+// A cloro task's idempotency key: the engine, the country, the UTC day and
+// the question. A run sent again on the same day gets the same tasks back
+// and is not charged twice. cloro does not return a task's prompt, so the
+// key also carries the question for answers read back later.
+const cloroTaskKey = (engine: string, country: string, question: string) =>
+  `seo-ai-answers:${engine}:${country}:${new Date().toISOString().slice(0, 10)}:${question}`
+const questionOf = (key: string | null) =>
+  key?.split(':').slice(4).join(':') ?? ''
+
+const cloroShown = (result: Item): Shown | null => {
+  const markdown = typeof result.text === 'string' ? result.text : ''
+  // Every source counts. ChatGPT sources can carry footnote: true, but in
+  // live answers the links written into the text came back that way too.
+  const sources = urls(list(result.sources))
+  if (!markdown && !sources.length) return null
+  return {
+    markdown,
+    sources,
+    model:
+      typeof result.model === 'string' && result.model ? result.model : null,
+  }
+}
+
 // The answer's own words: citation pills such as [1](url) or
 // [example.com](url) and bare links go, so a citation is never also counted
 // as a mention by name.
@@ -156,7 +196,7 @@ type Answer = {
   cited_url: string | null
   // The other sites the answer cites, by host, up to MAX_SOURCES.
   sources: string[]
-  // The model DataForSEO reports for the answer, when it reports one.
+  // The model the provider reports for the answer, when it reports one.
   model: string | null
   answered_at: string | null
   error?: string
@@ -209,7 +249,15 @@ function judge(
     }
   }
   const answered_at = String(task.result.datetime ?? '').slice(0, 10) || null
-  const shown = engine.shown(task.result)
+  return classify(engine.shown(task.result), answered_at, site)
+}
+
+// What an answer says about the site.
+function classify(
+  shown: Shown | null,
+  answered_at: string | null,
+  site: { domain: string; terms: string[] },
+): Answer {
   if (!shown) return { result: 'no_answer', ...empty, answered_at }
   // Links written into the answer count as sources too.
   const linked = shown.markdown.match(/https?:\/\/[^\s)\]]+/g) ?? []
@@ -282,7 +330,7 @@ const ROUND_WAIT_MS = 5_000
 export const AI_ANSWER_WAIT_SECONDS = 40
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms))
 
-// A queued answer, as "<engine>:<DataForSEO task id>".
+// A queued answer, as "<engine>:<DataForSEO or cloro task id>".
 const TASK_PATTERN = /^([a-z_]+):([0-9a-f-]{20,64})$/
 export const AI_ANSWER_TASK_PATTERN = TASK_PATTERN
 
@@ -294,17 +342,48 @@ type Row = {
   // The answer's task, kept after it is read, so later pages read it back
   // for free instead of asking again.
   ref: string | null
-  cost_usd: number
+  // USD for DataForSEO, credits for cloro.
+  cost: number
 } & Answer
 
 type Waiting = {
   row: Row
-  engine: Engine
+  // The DataForSEO engine, or null for a cloro task.
+  engine: Engine | null
   id: string
+}
+
+// What a finished cloro task says about the site.
+function cloroJudge(
+  task: { status: string; createdAt: string | null; response: Item | null },
+  site: { domain: string; terms: string[] },
+): Answer {
+  if (task.status !== 'COMPLETED' || !task.response) {
+    const error = (task.response?.error ?? {}) as {
+      code?: string
+      message?: string
+    }
+    return {
+      result: 'unavailable',
+      ...empty,
+      error:
+        `cloro: ${error.code ?? task.status}${error.message ? `, ${error.message}` : ''}`.slice(
+          0,
+          200,
+        ),
+    }
+  }
+  return classify(
+    cloroShown(task.response),
+    task.createdAt?.slice(0, 10) ?? null,
+    site,
+  )
 }
 
 export async function runAiAnswers(
   input: {
+    // Default dataforseo.
+    provider?: 'dataforseo' | 'cloro'
     site: string
     country: string
     detail: Detail
@@ -324,7 +403,9 @@ export async function runAiAnswers(
   // reads every answer back at no cost instead of asking again.
   more: (offset: number, tasks: string[]) => string,
 ): Promise<CommandResult> {
-  const keys = dataForSeoKeys(headers)
+  const cloro = input.provider === 'cloro'
+  const keys = cloro ? [cloroKey(headers)] : dataForSeoKeys(headers)
+  const engines = cloro ? CLORO_ENGINES : ENGINES
   const domain = registrableDomain(input.site)?.domain
   if (!domain) {
     throw new CommandError(
@@ -351,7 +432,7 @@ export async function runAiAnswers(
     impressions,
     task: null,
     ref: null,
-    cost_usd: 0,
+    cost: 0,
     ...empty,
   })
 
@@ -359,22 +440,30 @@ export async function runAiAnswers(
     // Reading back costs nothing; the tasks were paid for when queued.
     for (const value of tasks) {
       const match = TASK_PATTERN.exec(value)
-      const engine = ENGINES.find((item) => item.name === match?.[1])
-      if (!match || !engine) {
+      const name = match?.[1] ?? ''
+      const engine = ENGINES.find((item) => item.name === name)
+      const known = cloro
+        ? CLORO_ENGINES.some((item) => item.name === name)
+        : Boolean(engine)
+      if (!match || !known) {
         throw new CommandError(
           'INVALID_INPUT',
-          `"${value}" is not an ai_answers task. Tasks look like <engine>:<id>, with the engine one of ${ENGINES.map((item) => item.name).join(', ')}.`,
+          `"${value}" is not an ai_answers task. Tasks look like <engine>:<id>, with the engine one of ${engines.map((item) => item.name).join(', ')}.`,
         )
       }
       const row: Row = {
         ...blank('', null),
-        engine: engine.name,
+        engine: name,
         result: 'pending',
         task: value,
         ref: value,
       }
       rows.push(row)
-      waiting.push({ row, engine, id: match[2] as string })
+      waiting.push({
+        row,
+        engine: cloro ? null : (engine ?? null),
+        id: match[2] as string,
+      })
     }
   } else {
     let questions: { query: string; impressions: number | null }[]
@@ -395,11 +484,64 @@ export async function runAiAnswers(
         .filter((item) => item.askable)
         .slice(0, AI_ANSWER_QUESTIONS)
     }
-    const markets = questions.length
-      ? await marketsFor(keys, input.country)
-      : new Map<string, Market | string>()
+    if (cloro && questions.length) {
+      const asked = questions.flatMap((question) =>
+        CLORO_ENGINES.map((engine) => {
+          const row: Row = {
+            ...blank(question.query, question.impressions),
+            engine: engine.name,
+            result: 'unavailable',
+          }
+          rows.push(row)
+          return { row, engine }
+        }),
+      )
+      let queued: Awaited<ReturnType<typeof cloroQueue>> = []
+      try {
+        queued = await cloroQueue(
+          keys[0] ?? '',
+          asked.map(({ row, engine }) => ({
+            taskType: engine.type,
+            idempotencyKey: cloroTaskKey(
+              engine.name,
+              input.country,
+              row.question,
+            ),
+            payload: {
+              prompt: row.question,
+              country: input.country.toUpperCase(),
+            },
+          })),
+        )
+      } catch (error) {
+        // A missing or rejected key stops the run.
+        if (error instanceof CommandError && error.code === 'NO_KEY') {
+          throw error
+        }
+        for (const { row } of asked) {
+          row.error =
+            error instanceof Error ? error.message.slice(0, 200) : 'failed'
+        }
+      }
+      queued.forEach((task, index) => {
+        const row = asked[index]?.row
+        if (!row) return
+        if ('error' in task) {
+          row.error = task.error.slice(0, 200)
+          return
+        }
+        row.result = 'pending'
+        row.task = `${row.engine}:${task.id}`
+        row.ref = row.task
+        waiting.push({ row, engine: null, id: task.id })
+      })
+    }
+    const markets =
+      questions.length && !cloro
+        ? await marketsFor(keys, input.country)
+        : new Map<string, Market | string>()
     await Promise.all(
-      ENGINES.map(async (engine) => {
+      (cloro ? [] : ENGINES).map(async (engine) => {
         const engineRows: Row[] = questions.map((question) => ({
           ...blank(question.query, question.impressions),
           engine: engine.name,
@@ -439,7 +581,7 @@ export async function runAiAnswers(
         }
         engineRows.forEach((row, index) => {
           const task = queuedTasks[index]
-          row.cost_usd = task?.cost ?? 0
+          row.cost = task?.cost ?? 0
           if (!task || task.status_code >= 40000 || !task.id) {
             row.error = `dataforseo: ${task?.status_message ?? 'no task'}`
             return
@@ -469,6 +611,26 @@ export async function runAiAnswers(
     await Promise.all(
       pending.map(async (item) => {
         try {
+          if (!item.engine) {
+            const task = await cloroTaskGet(keys[0] ?? '', item.id)
+            if (!task) {
+              Object.assign(item.row, {
+                result: 'unavailable',
+                task: null,
+                error:
+                  'cloro no longer has this task: it keeps tasks for 24 hours after they are created.',
+              })
+              return
+            }
+            if (!item.row.question) item.row.question = questionOf(task.key)
+            if (task.status === 'QUEUED' || task.status === 'PROCESSING') {
+              still.push(item)
+              return
+            }
+            item.row.cost = task.credits ?? 0
+            Object.assign(item.row, cloroJudge(task, site), { task: null })
+            return
+          }
           const task = await dataForSeoGet(keys, `${item.engine.get}${item.id}`)
           if (!item.row.question) {
             item.row.question = String(task.data.keyword ?? '')
@@ -496,10 +658,10 @@ export async function runAiAnswers(
   rows.sort(
     (a, b) =>
       a.question.localeCompare(b.question) ||
-      ENGINES.findIndex((e) => e.name === a.engine) -
-        ENGINES.findIndex((e) => e.name === b.engine),
+      engines.findIndex((e) => e.name === a.engine) -
+        engines.findIndex((e) => e.name === b.engine),
   )
-  const cost = usd(rows.reduce((sum, row) => sum + row.cost_usd, 0))
+  const cost = usd(rows.reduce((sum, row) => sum + row.cost, 0))
   const count = (result: Answer['result']) =>
     rows.filter((row) => row.result === result).length
   const left = rows.filter((row) => row.task).map((row) => row.task as string)
@@ -515,7 +677,7 @@ export async function runAiAnswers(
   const questionCount = new Set(rows.map((row) => row.question)).size
   const notes = [
     tasks.length
-      ? `${tasks.length === 1 ? 'One answer' : `${tasks.length} answers`} queued by an earlier run, read back at no cost.`
+      ? `${tasks.length === 1 ? 'One answer' : `${tasks.length} answers`} queued by an earlier run, read back at no cost.${cloro ? ' cloro charges each answer once, when it finishes.' : ''}`
       : given.length
         ? `The ${given.length} questions you gave, asked as written. Impressions are blank because they don't come from Search Console.`
         : questionCount
@@ -523,10 +685,12 @@ export async function runAiAnswers(
           : `No askable questions in Search Console’s AI-shaped queries for ${range.startDate} to ${range.endDate}, so no answers were checked and nothing was spent.`,
     ...(rows.length
       ? [
-          `Cited ${count('cited')}, mentioned ${count('mentioned')}, neither ${count('neither')}, no answer shown ${count('no_answer')}, unavailable ${count('unavailable')}, not ready ${count('pending')}. DataForSEO cost: $${cost}.`,
+          `Cited ${count('cited')}, mentioned ${count('mentioned')}, neither ${count('neither')}, no answer shown ${count('no_answer')}, unavailable ${count('unavailable')}, not ready ${count('pending')}. ${cloro ? `cloro credits charged for the answers that finished: ${cost}.` : `DataForSEO cost: $${cost}.`}`,
           ...(left.length
             ? [
-                `${left.length === 1 ? "One answer wasn't" : `${left.length} answers weren't`} ready yet. They're paid for: ask ai_answers again with the same target and tasks ${JSON.stringify(left)} in a minute to read them at no cost (DataForSEO keeps them for 30 days).`,
+                cloro
+                  ? `${left.length === 1 ? "One answer wasn't" : `${left.length} answers weren't`} ready yet. cloro charges each one only when it finishes: ask ai_answers again with provider cloro, the same target and tasks ${JSON.stringify(left)} in a minute to read them (cloro keeps them for 24 hours).`
+                  : `${left.length === 1 ? "One answer wasn't" : `${left.length} answers weren't`} ready yet. They're paid for: ask ai_answers again with the same target and tasks ${JSON.stringify(left)} in a minute to read them at no cost (DataForSEO keeps them for 30 days).`,
               ]
             : []),
           ...(topCited.length
@@ -535,8 +699,13 @@ export async function runAiAnswers(
               ]
             : []),
           'Each row is one sample of an answer that changes from run to run, not a ranking.',
-          `cited: the answer lists or links a page on ${domain} or a subdomain. mentioned: no such source, but the answer text names ${[domain, ...site.terms].join(' or ')}, a text match. no_answer: the engine showed no AI answer for the question. sources: the other sites the answer cites, up to ${MAX_SOURCES}. model: the model DataForSEO reports for the answer, when it reports one.`,
-          `Engines: ${ENGINES.map((engine) => `${engine.name} is ${engine.means}`).join('; ')}.`,
+          ...(cloro && !tasks.length
+            ? [
+                'cloro keeps one answer per question, engine and country each UTC day: asking again today reads these answers back instead of asking again.',
+              ]
+            : []),
+          `cited: the answer lists or links a page on ${domain} or a subdomain. mentioned: no such source, but the answer text names ${[domain, ...site.terms].join(' or ')}, a text match. no_answer: the engine showed no AI answer for the question. sources: the other sites the answer cites, up to ${MAX_SOURCES}. model: the model ${cloro ? 'cloro' : 'DataForSEO'} reports for the answer, when it reports one.`,
+          `Engines: ${engines.map((engine) => `${engine.name} is ${engine.means}`).join('; ')}.`,
         ]
       : []),
   ]
@@ -549,7 +718,8 @@ export async function runAiAnswers(
     sources: row.sources.join(', '),
     model: row.model,
     answered_at: row.answered_at,
-    cost_usd: row.cost_usd,
+    // Each row names its cost in the provider's own unit.
+    ...(cloro ? { credits: row.cost } : { cost_usd: row.cost }),
     task: row.task,
     error: row.error ?? null,
   }))
@@ -564,7 +734,7 @@ export async function runAiAnswers(
       more: (offset) => more(offset, refs),
     }),
     data: {
-      provider: 'dataforseo',
+      provider: input.provider ?? 'dataforseo',
       action: 'ai_answers',
       site: input.site,
       country: input.country,
@@ -574,7 +744,8 @@ export async function runAiAnswers(
           ? { section: 'given' }
           : { section: 'ai-queries', ...range },
       questions: [...new Set(rows.map((row) => row.question))],
-      costUsd: cost,
+      costUsd: cloro ? null : cost,
+      credits: cloro ? cost : null,
       pendingTasks: left,
       // Every answer's task: pass them as tasks to page through these
       // answers again at no cost.
@@ -584,7 +755,11 @@ export async function runAiAnswers(
       offset: input.offset,
       rows: rows
         .slice(input.offset, input.offset + PAGE_SIZE)
-        .map(({ error, ...row }) => (error ? { ...row, error } : row)),
+        .map(({ error, cost, ...row }) => ({
+          ...row,
+          ...(cloro ? { credits: cost } : { cost_usd: cost }),
+          ...(error ? { error } : {}),
+        })),
     },
   }
 }

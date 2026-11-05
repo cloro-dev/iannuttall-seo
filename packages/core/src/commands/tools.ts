@@ -433,7 +433,7 @@ export const SHARED_TOOLS: SharedTool[] = [
     name: 'seo_research',
     command: 'research',
     title: 'Keyword, competitor, backlink and AI answer data',
-    description: `Data from the person’s own DataForSEO or Ahrefs account, which costs them credits. It uses the key the person saved on their seoskill.dev account (or on this machine for the CLI). Actions: ${RESEARCH_HELP}`,
+    description: `Data from the person’s own DataForSEO, Ahrefs or cloro account, which costs them credits. It uses the key the person saved on their seoskill.dev account (or on this machine for the CLI). Actions: ${RESEARCH_HELP}`,
     input: z.object({
       provider: z.enum(RESEARCH_PROVIDERS),
       action: z.enum(RESEARCH_ACTIONS),
@@ -462,11 +462,15 @@ export const SHARED_TOOLS: SharedTool[] = [
       const more = (offset: number) =>
         `seo_research with the same input, detail "rows", offset ${offset}`
       if (input.action === 'ai_answers') {
-        if (input.provider !== 'dataforseo') {
-          throw new CommandError('INVALID_INPUT', 'ai_answers uses dataforseo.')
+        if (input.provider === 'ahrefs') {
+          throw new CommandError(
+            'INVALID_INPUT',
+            'ai_answers uses dataforseo or cloro.',
+          )
         }
         return runAiAnswers(
           {
+            provider: input.provider,
             site:
               input.keywords.length || input.tasks.length
                 ? input.target
@@ -766,7 +770,7 @@ export const MCP_SERVER_INFO = {
 export const MCP_INSTRUCTIONS = `SEO Skill reads the person's own Search Console, Google Analytics, Bing Webmaster Tools, Clicky and optional keyword accounts, and returns facts with their dates and limits. It gives no advice.
 1. seo_sites: the properties the connected accounts can read.
 2. seo_report: start here. Without site it summarises last week across every site in the weekly site audit (beta) and names the site to ask about next. With site it shows that property's overview and every section's count and top rows; then ask for the one section you need. Section issues keeps a list of what it found for the site between sessions; mark records which the person fixed or wants ignored.
-3. seo_page for one URL, seo_compare for before and after a date, seo_index for Google's indexing reasons and pages that lost their clicks, seo_research for keyword, competitor and backlink data, and whether AI answers cite the site, from the DataForSEO or Ahrefs key the person saved, seo_data for raw rows, including Google Analytics, Bing and Clicky.
+3. seo_page for one URL, seo_compare for before and after a date, seo_index for Google's indexing reasons and pages that lost their clicks, seo_research for keyword, competitor and backlink data, and whether AI answers cite the site, from the DataForSEO, Ahrefs or cloro key the person saved, seo_data for raw rows, including Google Analytics, Bing and Clicky.
 4. seo_lint checks copy you are writing or editing (a landing page, blog post, title or meta description) for patterns common in AI-written text and for title and description length. It reads only the text or files you give it.`
 
 // How an MCP surface writes "run this next": the tool name and its inputs.

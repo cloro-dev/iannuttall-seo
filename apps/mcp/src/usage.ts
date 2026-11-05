@@ -13,6 +13,7 @@ export type UsageKind =
   | 'url_inspections'
   | 'research_dataforseo_calls'
   | 'research_ahrefs_calls'
+  | 'research_cloro_calls'
   | 'included_dataforseo_microusd'
   | 'internal_links_free_runs'
   | 'internal_links_pages'

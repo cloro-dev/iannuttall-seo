@@ -1,13 +1,13 @@
 import { readJson } from '../http/read-json.js'
 import { CommandError } from './types.js'
 
-// Keyword, competitor and backlink data from the person's own DataForSEO,
-// Ahrefs account. Keys come as header-style names (from request
+// Keyword, competitor, backlink and SERP data from the person's own
+// DataForSEO, Ahrefs or cloro account. Keys come as header-style names (from request
 // headers in the hosted MCP, from the local secret store in the CLI) and are
 // used for this one call only. Each function returns plain rows with the provider's own metric
 // names, so numbers from different providers are never mixed.
 
-export type ResearchProvider = 'dataforseo' | 'ahrefs'
+export type ResearchProvider = 'dataforseo' | 'ahrefs' | 'cloro'
 export type ResearchAction =
   | 'keyword_metrics'
   | 'ranked_keywords'
@@ -36,7 +36,7 @@ function need(headers: Headers, provider: ResearchProvider): string[] {
           headers.get('x-dataforseo-login'),
           headers.get('x-dataforseo-password'),
         ]
-      : [headers.get('x-ahrefs-key')]
+      : [headers.get(provider === 'ahrefs' ? 'x-ahrefs-key' : 'x-cloro-key')]
   if (values.some((value) => !value)) {
     throw new CommandError(
       'NO_KEY',
@@ -49,6 +49,9 @@ function need(headers: Headers, provider: ResearchProvider): string[] {
 // How long one attempt may take. DataForSEO's live tasks, AI answers among
 // them, can take most of a minute; lists and Ahrefs answer in seconds.
 const TASK_TIMEOUT_MS = 60_000
+// cloro retries inside one sync request for up to 5 minutes, and its docs
+// ask for a client timeout of at least that long.
+const CLORO_TIMEOUT_MS = 300_000
 const READ_TIMEOUT_MS = 30_000
 const RETRY_DELAY_MS = 250
 
@@ -64,7 +67,11 @@ async function call(
   request: Request,
 ): Promise<Response> {
   const read = request.method === 'GET'
-  const timeoutMs = read ? READ_TIMEOUT_MS : TASK_TIMEOUT_MS
+  const timeoutMs = read
+    ? READ_TIMEOUT_MS
+    : provider === 'cloro'
+      ? CLORO_TIMEOUT_MS
+      : TASK_TIMEOUT_MS
   for (let attempt = 1; ; attempt += 1) {
     const last = attempt === 2
     let response: Response
@@ -92,13 +99,16 @@ async function call(
       continue
     }
     const text = (await response.text()).slice(0, 300)
-    throw new CommandError(
-      response.status === 401 || response.status === 403
-        ? 'NO_KEY'
-        : response.status === 429
-          ? 'RATE_LIMITED'
-          : 'PROVIDER_ERROR',
-      `${provider} answered ${response.status}. ${text}`,
+    throw Object.assign(
+      new CommandError(
+        response.status === 401 || response.status === 403
+          ? 'NO_KEY'
+          : response.status === 429
+            ? 'RATE_LIMITED'
+            : 'PROVIDER_ERROR',
+        `${provider} answered ${response.status}. ${text}`,
+      ),
+      { status: response.status },
     )
   }
 }
@@ -126,12 +136,14 @@ function requireInput(input: ResearchInput) {
 }
 
 // Rows, plus what DataForSEO says the calls cost (null for Ahrefs, whose
-// responses carry no cost), whether any call came back partial, the
-// keywords that failed while others answered, and the keywords the provider
-// answered with no data, so an empty answer is never silent.
+// responses carry no cost), the credits cloro charged (null for the
+// others), whether any call came back partial, the keywords that failed
+// while others answered, and the keywords the provider answered with no
+// data, so an empty answer is never silent.
 export type ResearchRows = {
   rows: Row[]
   costUsd: number | null
+  credits: number | null
   partial: boolean
   missed: string[]
   noData: string[]
@@ -169,15 +181,23 @@ export async function research(
   headers: Headers,
   input: ResearchInput,
 ): Promise<ResearchRows> {
+  if (provider === 'cloro' && input.action !== 'serp') {
+    throw new CommandError(
+      'INVALID_INPUT',
+      `cloro has serp and ai_answers, not ${input.action}.`,
+    )
+  }
   requireInput(input)
   if (input.action === 'link_gap') return linkGap(provider, headers, input)
   const keys = need(headers, provider)
   if (provider === 'dataforseo') return dataForSeo(keys, input)
+  if (provider === 'cloro') return cloroSerp(keys[0] ?? '', input)
   const missed: string[] = []
   const rows = await ahrefs(keys[0] ?? '', input, missed)
   return {
     rows,
     costUsd: null,
+    credits: null,
     partial: false,
     missed,
     noData: withoutData(input, rows, missed, 100),
@@ -404,6 +424,7 @@ async function dataForSeo(
   return {
     rows,
     costUsd: Math.round(spent.cost * 10_000) / 10_000,
+    credits: null,
     partial: spent.partial,
     missed: spent.missed,
     noData: withoutData(input, rows, spent.missed, 700),
@@ -714,6 +735,7 @@ async function linkGap(
     rows,
     costUsd:
       provider === 'dataforseo' ? Math.round(cost * 10_000) / 10_000 : null,
+    credits: null,
     partial,
     missed: [],
     noData: [],
@@ -816,4 +838,237 @@ function flattenIntents(row: Row): Row {
     .filter(([, value]) => value === true)
     .map(([name]) => name.replace(/^is_/, ''))
   return { ...row, intents: names.join(' ') || null }
+}
+
+// cloro
+
+const items = (value: unknown) =>
+  Array.isArray(value) ? (value as Record<string, unknown>[]) : []
+
+// The cloro API key, or a NO_KEY error.
+export function cloroKey(headers: Headers): string {
+  return need(headers, 'cloro')[0] ?? ''
+}
+
+// One cloro sync request: its result and the credits it charged. cloro
+// charges only a request that succeeds, so a refused request is safe to
+// send again.
+async function cloroSync(
+  key: string,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<{ result: Record<string, unknown>; credits: number }> {
+  const response = await call(
+    'cloro',
+    new Request(`https://api.cloro.dev/${path}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${key}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }),
+  )
+  const data = await readJson<{ success?: boolean; result?: unknown }>(
+    response,
+    'cloro',
+  )
+  if (!data.success || !data.result || typeof data.result !== 'object') {
+    throw new CommandError('PROVIDER_ERROR', `cloro: no result from ${path}`)
+  }
+  return {
+    result: data.result as Record<string, unknown>,
+    credits: Number(response.headers.get('x-credits-charged')) || 0,
+  }
+}
+
+// Up to 500 tasks queued in one request (cloro's async API), each the id of
+// its task or why cloro refused it. cloro charges a task only when it
+// finishes. A task whose idempotency key was used before comes back as that
+// earlier task, so a request sent again does not queue or charge twice.
+export async function cloroQueue(
+  key: string,
+  tasks: {
+    taskType: string
+    idempotencyKey: string
+    payload: Record<string, unknown>
+  }[],
+): Promise<({ id: string } | { error: string })[]> {
+  const response = await call(
+    'cloro',
+    new Request('https://api.cloro.dev/v1/async/task/batch', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${key}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(tasks),
+    }),
+  )
+  const data = await readJson<{ results?: unknown }>(response, 'cloro')
+  const results = items(data.results)
+  return tasks.map((_, index) => {
+    const result = results.find((item) => item.index === index)
+    const task = result?.task as { id?: unknown } | undefined
+    if (result?.success === true && typeof task?.id === 'string') {
+      return { id: task.id }
+    }
+    const error = (result?.error ?? {}) as {
+      code?: string
+      message?: string
+      details?: { taskId?: unknown }
+    }
+    if (
+      error.code === 'RESOURCE_ALREADY_EXISTS' &&
+      typeof error.details?.taskId === 'string'
+    ) {
+      return { id: error.details.taskId }
+    }
+    return {
+      error: `cloro: ${error.code ?? 'no task'}${error.message ? `, ${error.message}` : ''}`,
+    }
+  })
+}
+
+// One queued cloro task: its status (QUEUED, PROCESSING, COMPLETED or
+// FAILED), the credits it charged once it finished, its idempotency key,
+// when it was created and, once it finished, the answer or the error. Null
+// when cloro no longer has the task: it deletes tasks 24 hours after they
+// were created. Reading a task costs nothing.
+export async function cloroTaskGet(
+  key: string,
+  id: string,
+): Promise<{
+  status: string
+  credits: number | null
+  key: string | null
+  createdAt: string | null
+  response: Record<string, unknown> | null
+} | null> {
+  let response: Response
+  try {
+    response = await call(
+      'cloro',
+      new Request(`https://api.cloro.dev/v1/async/task/${id}`, {
+        headers: { authorization: `Bearer ${key}` },
+      }),
+    )
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return null
+    throw error
+  }
+  const data = await readJson<{
+    task?: { status?: unknown; idempotencyKey?: unknown; createdAt?: unknown }
+    credits?: { creditsCharged?: unknown }
+    response?: unknown
+  }>(response, 'cloro')
+  const text = (value: unknown) => (typeof value === 'string' ? value : null)
+  return {
+    status: text(data.task?.status) ?? '',
+    credits:
+      typeof data.credits?.creditsCharged === 'number'
+        ? data.credits.creditsCharged
+        : null,
+    key: text(data.task?.idempotencyKey),
+    createdAt: text(data.task?.createdAt),
+    response:
+      data.response && typeof data.response === 'object'
+        ? (data.response as Record<string, unknown>)
+        : null,
+  }
+}
+
+// The credits left on a cloro account. The check itself is free.
+export async function cloroCredits(key: string): Promise<{
+  remaining: number
+  perCycle: number | null
+  cycleResetsAt: string | null
+}> {
+  const response = await call(
+    'cloro',
+    new Request('https://api.cloro.dev/v1/credits', {
+      headers: { authorization: `Bearer ${key}` },
+    }),
+  )
+  return readJson(response, 'cloro')
+}
+
+// A link cloro could not resolve comes back empty or as a Google goto URL.
+function resolved(link: unknown): string | null {
+  return typeof link === 'string' &&
+    /^https?:\/\//.test(link) &&
+    !/^https?:\/\/(www\.)?google\.[a-z.]+\/goto\b/.test(link)
+    ? link
+    : null
+}
+
+function hostOf(url: string | null): string | null {
+  if (!url) return null
+  try {
+    return new URL(url).hostname
+  } catch {
+    return null
+  }
+}
+
+// Up to 5 keywords, one Google search each with the AI Overview: the first
+// page of organic results, then the pages the AI Overview cites, when
+// Google shows one.
+async function cloroSerp(
+  key: string,
+  input: ResearchInput,
+): Promise<ResearchRows> {
+  const missed: string[] = []
+  let credits = 0
+  const rows = await eachKeyword(
+    input.keywords.slice(0, 5),
+    missed,
+    async (keyword) => {
+      const done = await cloroSync(key, 'v1/monitor/google', {
+        query: keyword,
+        country: input.country.toUpperCase(),
+        include: { aioverview: true },
+      })
+      credits += done.credits
+      const organic = items(done.result.organicResults).map((item) => {
+        const url = resolved(item.link)
+        // Without the page, the displayed link still shows the site.
+        const site = /^(https?:\/\/)?([^/\s›]+)/.exec(
+          String(item.displayedLink ?? ''),
+        )
+        return {
+          keyword,
+          type: 'organic',
+          position: Number(item.position) || null,
+          url,
+          domain: url ? hostOf(url) : (site?.[2] ?? null),
+          title: typeof item.title === 'string' ? item.title : null,
+        }
+      })
+      const overview = done.result.aioverview as
+        | { sources?: unknown }
+        | null
+        | undefined
+      const cited = items(overview?.sources).map((source) => {
+        const url = resolved(source.url)
+        return {
+          keyword,
+          type: 'ai_overview',
+          position: Number(source.position) || null,
+          url,
+          domain: hostOf(url),
+          title: typeof source.label === 'string' ? source.label : null,
+        }
+      })
+      return [...organic, ...cited]
+    },
+  )
+  return {
+    rows,
+    costUsd: null,
+    credits,
+    partial: false,
+    missed,
+    noData: withoutData(input, rows, missed, 5),
+  }
 }

@@ -99,6 +99,7 @@ export const KEY_FIELDS: { header: string; label: string; secret: boolean }[] =
       secret: true,
     },
     { header: 'x-ahrefs-key', label: 'Ahrefs API key', secret: true },
+    { header: 'x-cloro-key', label: 'cloro API key', secret: true },
     { header: 'x-typesafe-key', label: 'TypeSafe API key', secret: true },
   ]
 
